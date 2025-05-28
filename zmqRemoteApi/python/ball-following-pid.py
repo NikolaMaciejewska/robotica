@@ -8,10 +8,10 @@ Kp = 0.9
 Ki = 0.0
 Kd = 0.3
 
-target_distance = 0.3
-max_speed = 1.5
+target_distance = 0.1
+max_speed = 6.0
 min_speed = -0.5
-base_speed = 1.3
+base_speed = 4.0
 
 # PID parameters for ball tracking
 ball_Kp = 0.007
@@ -106,7 +106,7 @@ def main():
             correction, ball_integral = pid_ball_tracking(error, ball_last_error, ball_integral, dt)
             ball_last_error = error
 
-            speed = base_speed * 0.5 if r > 40 else base_speed
+            speed = base_speed * 0.5 if r > 50 else base_speed
             left_speed = speed - correction
             right_speed = speed + correction
 
@@ -121,7 +121,7 @@ def main():
 
         elif not initial_search_done:
             if time.time() - initial_search_start < initial_search_time:
-                left_speed, right_speed =1.0, -1.0
+                left_speed, right_speed =-1.0, 1.0
                 print("Initial ball search")
             else:
                 initial_search_done = True
