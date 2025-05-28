@@ -1,6 +1,7 @@
 import robotica
 import numpy as np
 import time
+import cv2
 import random
 import torch
 import torch.nn as nn
@@ -40,15 +41,49 @@ class ReplayBuffer:
 
 # --- Action mapping ---
 def action_to_speed(action):
-    if action == 0:  # move forward
+    if action == 0:  # forward
         return 1.0, 1.0
-    elif action == 1:  # turn left
+    elif action == 1:  # slight left
+        return 0.5, 1.0
+    elif action == 2:  # slight right
+        return 1.0, 0.5
+    elif action == 3:  # hard left
         return -1.0, 1.0
-    elif action == 2:  # turn right
+    elif action == 4:  # hard right
         return 1.0, -1.0
 
+def detect_ball(img):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    # Red color range in HSV
+    lower_red1 = np.array([0, 120, 70])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([170, 120, 70])
+    upper_red2 = np.array([180, 255, 255])
+
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    mask = mask1 + mask2
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    ball_detected = False
+    ball_x_norm = 0.0
+    ball_radius_norm = 0.0
+
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        ((x, y), radius) = cv2.minEnclosingCircle(c)
+        if radius > 5:
+            img_center_x = img.shape[1] / 2
+            ball_x_norm = (x - img_center_x) / img_center_x  # -1 to +1
+            ball_radius_norm = radius / img_center_x         # relative size
+            ball_detected = True
+
+    return ball_detected, ball_x_norm, ball_radius_norm
+
 # --- Main ---
-def main(args=None, train_mode=True):
+def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
     max_duration = 600  # z. B. 10 Minuten Training
     start_time = time.time()
 
@@ -56,11 +91,16 @@ def main(args=None, train_mode=True):
     current_reward = 0
 
     coppelia = robotica.Coppelia()
-    robot = robotica.P3DX(coppelia.sim, 'PioneerP3DX')
+    robot = robotica.P3DX(coppelia.sim, 'PioneerP3DX', True)
 
     # Setup DQN
-    state_dim = 8  # Assume 8 sonar sensors (Pioneer P3DX has 16 but usually you can pick 8 important ones)
-    action_dim = 3  # forward, left, right
+    state_dim = 0
+    if obstacle_mode:
+        state_dim += 8  # Assume 8 sonar sensors (Pioneer P3DX has 16 but usually you can pick 8 important ones)
+    if ball_mode:
+        state_dim += 2
+
+    action_dim = 5  # forward, left, right
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     policy_net = DQN(state_dim, action_dim).to(device)
@@ -85,7 +125,15 @@ def main(args=None, train_mode=True):
 
     while coppelia.is_running() and (time.time() - start_time < max_duration):
         sonar = robot.get_sonar()
-        state = np.array(sonar[:8])  # take first 8 sonar sensors
+        img = robot.get_image()
+        ball_detected, ball_x_norm, ball_radius_norm = detect_ball(img)
+        state = []
+        if obstacle_mode:
+            state.extend(sonar[:8])  # add sonar readings
+        if ball_mode:
+            state.append(ball_x_norm)
+            state.append(ball_radius_norm)
+        state = np.array(state, dtype=np.float32)
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
 
         # ε-greedy policy
@@ -105,24 +153,46 @@ def main(args=None, train_mode=True):
 
         # New observation
         sonar_next = robot.get_sonar()
-        next_state = np.array(sonar_next[:8])
+        img = robot.get_image()
+        ball_detected, ball_x_norm, ball_radius_norm = detect_ball(img)
+        next_state = []
+        if obstacle_mode:
+            next_state.extend(sonar_next[:8])  # add sonar readings
+        if ball_mode:
+            next_state.append(ball_x_norm)
+            next_state.append(ball_radius_norm)
+
+        next_state = np.array(next_state, dtype=np.float32)
 
         # Reward design
         front_min = min(sonar_next[3], sonar_next[4])
         done = False
-        if front_min < 0.2:
-            reward = -5  # crash penalty
-            done = True
-        elif front_min > 0.5:
-            reward = 1  # good progress
-        else:
-            reward = 0
 
-        if action == 0:  # moving forward
-            reward += 0.3  # stronger bonus for going straight
-        else:
-            reward -= 0.15  # stronger penalty for turning
+        reward = 0.0
 
+        # --- Obstacle avoidance (high priority) ---
+        if obstacle_mode:
+            if front_min < 0.1:
+                reward -= 10.0  # Large penalty for crashing
+                done = True  # End episode
+            elif front_min > 0.25:
+                reward += 1.0  # Reward for staying safe
+
+        # --- Ball tracking (high priority) ---
+        if ball_mode:
+            if not ball_detected:
+                reward -= 5.0  # Penalty for losing sight of the ball
+            else:
+                # Encourage centering
+                reward += (1.0 - abs(ball_x_norm)) * 2.0
+                # Encourage approaching
+                reward += ball_radius_norm * 1.0
+
+        # --- General movement incentives (low priority) ---
+        if action == 0:
+            reward += 0.3  # small bonus for moving forward
+        else:
+            reward -= 0.15  # small penalty for turning
         print(reward)
         current_reward += reward
 
@@ -185,5 +255,5 @@ def main(args=None, train_mode=True):
         plt.show()
 
 if __name__ == '__main__':
-    main(train_mode=False)
+    main(train_mode=True, obstacle_mode=True, ball_mode=False)
 
