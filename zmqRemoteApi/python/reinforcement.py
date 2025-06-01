@@ -82,9 +82,27 @@ def detect_ball(img):
 
     return ball_detected, ball_x_norm, ball_radius_norm
 
+import matplotlib.pyplot as plt
+
+def plot_rewards(rewards, window=10, save_path='training_plot.png'):
+    smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(rewards, label='Episode Reward')
+    plt.plot(range(window - 1, len(rewards)), smoothed, label=f'{window}-Episode Moving Average', linestyle='--')
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.title('Training Progress')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.show()
+
 # --- Main ---
 def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
     max_duration = 600  # z. B. 10 Minuten Training
+    max_steps_per_episode = 100
     start_time = time.time()
 
     episode_rewards = []
@@ -109,7 +127,7 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
     target_net.eval()
 
     if not train_mode:
-        policy_net.load_state_dict(torch.load('dqn_model.pth', map_location=device))
+        policy_net.load_state_dict(torch.load('dqn_model1.pth', map_location=device))
         target_net.load_state_dict(policy_net.state_dict())
 
     optimizer = optim.Adam(policy_net.parameters(), lr=1e-3)
@@ -145,6 +163,7 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
             with torch.no_grad():
                 q_values = policy_net(state_tensor)
                 action = q_values.argmax().item()
+        print("ACTION: ", action)
 
         # Execute action
         lspeed, rspeed = action_to_speed(action)
@@ -165,7 +184,7 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
         next_state = np.array(next_state, dtype=np.float32)
 
         # Reward design
-        front_min = min(sonar_next[3], sonar_next[4])
+        front_min = min(sonar_next[2], sonar_next[3], sonar_next[4], sonar_next[5])
         done = False
 
         reward = 0.0
@@ -173,9 +192,14 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
         # --- Obstacle avoidance (high priority) ---
         if obstacle_mode:
             if front_min < 0.1:
-                reward -= 10.0  # Large penalty for crashing
-                done = True  # End episode
-            elif front_min > 0.25:
+                reward -= 5.0
+                # optional Recovery Move:
+                robot.set_speed(-0.5, -0.5)
+                time.sleep(0.3)
+                robot.set_speed(0.5, -0.5)
+                time.sleep(0.3)
+                #done = True  # End episode
+            elif front_min > 0.2:
                 reward += 1.0  # Reward for staying safe
 
         # --- Ball tracking (high priority) ---
@@ -222,38 +246,25 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
 
         # Target network update
         step_count += 1
+        if step_count % max_steps_per_episode == 0:
+            done = True
+
         if step_count % update_target_every == 0:
             target_net.load_state_dict(policy_net.state_dict())
 
         if done:
             episode_rewards.append(current_reward)
             current_reward = 0
-            robot.set_speed(0.0, 0.0)
-            time.sleep(0.5)
+            robot.reset_to_initial_position()
 
     coppelia.stop_simulation()
 
     # Save model
     if train_mode:
-        torch.save(policy_net.state_dict(), 'dqn_model.pth')
-
-        # Optional smoothing
-        def moving_average(data, window_size=10):
-            return np.convolve(data, np.ones(window_size) / window_size, mode='valid')
-
-        # Plot total reward per episode
-        plt.figure(figsize=(10, 5))
-        plt.plot(episode_rewards, label="Episode Reward")
-        plt.plot(moving_average(episode_rewards), label="Smoothed", linestyle='--')
-        plt.xlabel('Episode')
-        plt.ylabel('Total Reward')
-        plt.title('Training Progress')
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig('training_progress.png')
-        plt.show()
+        torch.save(policy_net.state_dict(), 'dqn_model1.pth')
+        np.save('episode_rewards.npy', episode_rewards)
+        plot_rewards(episode_rewards)
 
 if __name__ == '__main__':
-    main(train_mode=True, obstacle_mode=True, ball_mode=False)
+    main(train_mode=True, obstacle_mode=True, ball_mode=True)
 

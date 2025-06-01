@@ -71,6 +71,11 @@ class P3DX():
         if use_lidar:
             self.lidar = self.sim.getObject(f'/{robot_id}/lidar')
 
+        #NEW (store initial position)
+        self.robot_handle = self.sim.getObject(f'/{robot_id}')
+        self.initial_position = self.sim.getObjectPosition(self.robot_handle, -1)
+        self.initial_orientation = self.sim.getObjectOrientation(self.robot_handle, -1)
+
     def get_sonar(self):
         readings = []
         for i in range(self.num_sonar):
@@ -94,6 +99,12 @@ class P3DX():
     def set_speed(self, left_speed, right_speed):
         self.sim.setJointTargetVelocity(self.left_motor, left_speed)
         self.sim.setJointTargetVelocity(self.right_motor, right_speed)
+
+    #NEW
+    def reset_to_initial_position(self):
+        self.sim.setObjectPosition(self.robot_handle, -1, self.initial_position)
+        self.sim.setObjectOrientation(self.robot_handle, -1, self.initial_orientation)
+        self.set_speed(0.0, 0.0)  # Motoren stoppen
 
 
 def main(args=None):
