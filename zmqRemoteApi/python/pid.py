@@ -70,7 +70,7 @@ def main(args=None):
         else:
             side_distance = readings[1]
 
-            # Compute error
+            # Compute the error
             error = target_distance - side_distance
 
             # Timing
