@@ -140,9 +140,18 @@ def main():
     initial_search_start = time.time()
     initial_search_done = False
 
+    last_ball_radius = None
+    ball_radius_velocity = 0.0
+
     last_ball_direction = 0
     just_avoided_obstacle = False
     obstacle_cleared_time = 0
+
+    recovery_stage = 0
+    recovery_stage_start = 0
+
+    ball_search_stage = 0
+    ball_search_stage_start = 0
 
     while coppelia.is_running():
         current_time = time.time()
@@ -173,6 +182,10 @@ def main():
             img_center = img.shape[1] // 2
             error = img_center - x
 
+            if last_ball_radius is not None:
+                ball_radius_velocity = (r - last_ball_radius) / dt
+            last_ball_radius = r
+
             if error < -20:
                 last_ball_direction = -1
             elif error > 20:
@@ -183,40 +196,87 @@ def main():
             correction, ball_integral = pid_ball_tracking(error, ball_last_error, ball_integral, dt)
             ball_last_error = error
 
-            speed = base_speed * 0.6 if r > 50 else base_speed * 0.8
+            #speed = base_speed * 0.6 if r > 50 else base_speed * 0.8
+            # Estimate ball motion (positive = approaching, negative = moving away)
+            if ball_radius_velocity < -1.0:
+                speed = base_speed * 1.2  # Catch up
+            elif ball_radius_velocity > 1.0:
+                speed = base_speed * 0.5  # Slow down
+            else:
+                speed = base_speed * 0.8  # Default approach
+
             left_speed = speed - correction
             right_speed = speed + correction
 
             print(f"Tracking ball | Speeds: {left_speed:.2f}, {right_speed:.2f}")
 
         # 3. Recovery after obstacle
-        elif just_avoided_obstacle and (time.time() - obstacle_cleared_time < 2.0):
-            if last_ball_direction == -1:
-                left_speed, right_speed = -0.6, 0.6
-                print("Looking left for ball after avoidance")
-            elif last_ball_direction == 1:
-                left_speed, right_speed = 0.6, -0.6
-                print("Looking right for ball after avoidance")
-            else:
-                left_speed, right_speed = 0.5, -0.5
-                print("Looking around for ball after avoidance")
+        elif just_avoided_obstacle and (time.time() - obstacle_cleared_time < 4.0):
+            if recovery_stage == 0:
+                left_speed, right_speed = 2.0, -2.0
+                print("Recovery stage 0: Looking left for ball")
+                if time.time() - obstacle_cleared_time > 1.0:
+                    recovery_stage = 1
+                    recovery_stage_start = time.time()
+
+            elif recovery_stage == 1:
+                left_speed, right_speed = -2.0, 2.0
+                print("Recovery stage 1: Looking right for ball")
+                if time.time() - recovery_stage_start > 1.0:
+                    recovery_stage = 2
+                    recovery_stage_start = time.time()
+
+            elif recovery_stage == 2:
+                if last_ball_direction == -1:
+                    left_speed, right_speed = 1.6, -1.6
+                    print("Recovery stage 2: Final check left (last seen left)")
+                elif last_ball_direction == 1:
+                    left_speed, right_speed = -1.6, 1.6
+                    print("Recovery stage 2: Final check right (last seen right)")
+                else:
+                    left_speed, right_speed = 0.5, -0.5
+                    print("Recovery stage 2: Final scan")
+                if time.time() - recovery_stage_start > 1.0:
+                    just_avoided_obstacle = False
+                    recovery_stage = 0
+
 
         # 4. Initial search for ball
         elif not initial_search_done:
             if time.time() - initial_search_start < initial_search_time:
-                left_speed, right_speed = -1.0, 1.0
+                left_speed, right_speed = -1.5, 1.5
                 print("Initial ball search")
             else:
                 initial_search_done = True
-                print("Switching to wall following")
                 continue
 
         # 5. Wall following if ball lost
         elif ball_last_seen is None or time.time() - ball_last_seen > ball_lost_timeout:
-            left_speed, right_speed, wall_last_error, wall_integral, last_time = perform_wall_following(
-                readings, wall_last_error, wall_integral, last_time
-            )
-            print("Wall following")
+            # Do staged scanning before wall following
+            time_since_lost = time.time() - ball_last_seen if ball_last_seen else float('inf')
+
+            if ball_search_stage == 0:
+                left_speed, right_speed = 1.5, -1.5
+                print("Ball search stage 0: Scanning left")
+                if time_since_lost > ball_lost_timeout + 1.5:
+                    ball_search_stage = 1
+                    ball_search_stage_start = time.time()
+
+            elif ball_search_stage == 1:
+                left_speed, right_speed = -1.5, 1.5
+                print("Ball search stage 1: Scanning right")
+                if time.time() - ball_search_stage_start > 1.0:
+                    ball_search_stage = 2
+                    ball_search_stage_start = time.time()
+
+            elif ball_search_stage == 2:
+                print("Ball not found. Switching to wall following.")
+                left_speed, right_speed, wall_last_error, wall_integral, last_time = perform_wall_following(
+                    readings, wall_last_error, wall_integral, last_time
+                )
+            else:
+                ball_search_stage = 0  # Reset
+
 
 
         # 6. Ball lost but recently seen – rotate to search
