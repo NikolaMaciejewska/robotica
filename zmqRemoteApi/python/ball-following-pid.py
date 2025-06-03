@@ -3,110 +3,20 @@ import time
 import cv2
 import numpy as np
 
-# PID parameters
-Kp = 0.9
-Ki = 0.0
-Kd = 0.3
+# PID parameters for ball tracking
+ball_Kp = 0.005
+ball_Ki = 0.0003
+ball_Kd = 0.0015
 
-ball_Kp = 0.007
-ball_Ki = 0.0005
-ball_Kd = 0.003
-
-target_distance = 0.1
-max_speed = 3.5
+base_speed = 1.5
+max_speed = 3.0
 min_speed = -0.5
-base_speed = 2.0
-
-initial_search_time = 10.0
-ball_lost_timeout = 3.0
-
-def pid_wall_follow(error, last_error, integral, dt):
-    integral += error * dt
-    derivative = (error - last_error) / dt if dt > 0 else 0.0
-    output = Kp * error + Ki * integral + Kd * derivative
-    return output, integral
-
-def perform_wall_following(readings, last_error, integral, last_time):
-    target_distance = 0.3
-    base_speed = 1.3
-    max_speed = 1.5
-    min_speed = -0.5
-
-    def avoid_local(readings):
-        front_left = readings[3]
-        front_right = readings[4]
-        min_front = min(front_left, front_right)
-
-        if min_front < 0.25:
-            steer_strength = 2.0
-        elif min_front < 0.4:
-            steer_strength = 1.0
-        else:
-            return None
-
-        left_speed = base_speed + steer_strength
-        right_speed = base_speed - steer_strength
-        return left_speed, right_speed
-
-    obstacle = avoid_local(readings)
-    if obstacle:
-        return obstacle[0], obstacle[1], last_error, integral, time.time()
-
-    side_distance = readings[1]
-    error = target_distance - side_distance
-
-    current_time = time.time()
-    dt = current_time - last_time
-    dt = max(dt, 0.1)
-    last_time = current_time
-
-    correction, integral = pid_wall_follow(error, last_error, integral, dt)
-    last_error = error
-
-    left_speed = base_speed + correction
-    right_speed = base_speed - correction
-
-    # Clamp speeds
-    left_speed = max(min_speed, min(max_speed, left_speed))
-    right_speed = max(min_speed, min(max_speed, right_speed))
-
-    return left_speed, right_speed, last_error, integral, last_time
-
 
 def pid_ball_tracking(error, last_error, integral, dt):
     integral += error * dt
     derivative = (error - last_error) / dt if dt > 0 else 0.0
     output = ball_Kp * error + ball_Ki * integral + ball_Kd * derivative
     return output, integral
-
-def avoid(readings):
-    front_left = readings[3]
-    front_right = readings[4]
-    right = readings[6]
-    left = readings[1]
-
-    min_front = min(front_left, front_right)
-    too_close_front = min_front < 0.35
-    too_close_right = right < 0.25
-    too_close_left = left < 0.25
-
-    if too_close_front and too_close_right and too_close_left:
-        return 0.0, 0.0
-
-    if too_close_front:
-        if left > right:
-            return base_speed - 1.5, base_speed + 1.5
-        else:
-            return base_speed + 1.5, base_speed - 1.5
-
-    if too_close_right:
-        return base_speed - 1.0, base_speed + 1.0
-
-    if too_close_left:
-        return base_speed + 1.0, base_speed - 1.0
-
-    return None
-
 
 def find_red_ball(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -125,171 +35,175 @@ def find_red_ball(img):
         return tuple(map(int, circles[0][0]))
     return None
 
+def avoid_obstacles(readings):
+    front_left = readings[3]
+    front_right = readings[4]
+    left = readings[1]
+    right = readings[6]
+
+    # Early detection thresholds
+    front_threshold = 0.5
+    side_threshold = 0.35
+
+    # Check for obstacles ahead
+    if front_left < front_threshold or front_right < front_threshold:
+        if left > right:
+            # Turn left
+            return base_speed - 1.0, base_speed + 1.0
+        else:
+            # Turn right
+            return base_speed + 1.0, base_speed - 1.0
+
+    # Check for obstacles on the sides
+    if left < side_threshold:
+        # Turn right
+        return base_speed + 0.5, base_speed - 0.5
+    if right < side_threshold:
+        # Turn left
+        return base_speed - 0.5, base_speed + 0.5
+
+    return None
+
 def main():
     coppelia = robotica.Coppelia()
     robot = robotica.P3DX(coppelia.sim, 'PioneerP3DX', use_camera=True)
     coppelia.start_simulation()
 
-    wall_integral = 0.0
-    wall_last_error = 0.0
     ball_integral = 0.0
     ball_last_error = 0.0
-
     last_time = time.time()
-    ball_last_seen = None
-    initial_search_start = time.time()
-    initial_search_done = False
-
-    last_ball_radius = None
-    ball_radius_velocity = 0.0
-
-    last_ball_direction = 0
-    just_avoided_obstacle = False
-    obstacle_cleared_time = 0
-
-    recovery_stage = 0
-    recovery_stage_start = 0
-
-    ball_search_stage = 0
-    ball_search_stage_start = 0
+    search_step = 0
+    search_start_time = 0
 
     while coppelia.is_running():
         current_time = time.time()
-        dt = current_time - last_time
-        dt = max(dt, 0.05)
+        dt = max(current_time - last_time, 0.05)
         last_time = current_time
 
         readings = robot.get_sonar()
         img = robot.get_image()
         ball = find_red_ball(img)
 
-        # 1. Obstacle avoidance always first
-        obstacle = avoid(readings)
+        obstacle = avoid_obstacles(readings)
         if obstacle:
             left_speed, right_speed = obstacle
             robot.set_speed(left_speed, right_speed)
-            just_avoided_obstacle = True
-            obstacle_cleared_time = time.time()
             print("Avoiding obstacle")
             time.sleep(0.05)
             continue
 
-        # 2. Ball tracking
         if ball:
-            ball_last_seen = time.time()
-            just_avoided_obstacle = False
+            search_step = 0
+            search_start_time = 0
+
             x, y, r = ball
             img_center = img.shape[1] // 2
             error = img_center - x
 
-            if last_ball_radius is not None:
-                ball_radius_velocity = (r - last_ball_radius) / dt
-            last_ball_radius = r
-
-            if error < -20:
-                last_ball_direction = -1
-            elif error > 20:
-                last_ball_direction = 1
-            else:
-                last_ball_direction = 0
-
             correction, ball_integral = pid_ball_tracking(error, ball_last_error, ball_integral, dt)
             ball_last_error = error
 
-            #speed = base_speed * 0.6 if r > 50 else base_speed * 0.8
-            # Estimate ball motion (positive = approaching, negative = moving away)
-            if ball_radius_velocity < -1.0:
-                speed = base_speed * 1.2  # Catch up
-            elif ball_radius_velocity > 1.0:
-                speed = base_speed * 0.5  # Slow down
+            # Dynamic speed based on distance (approximated by radius r)
+            if r < 15:
+                speed = 3.0
+            elif r < 25:
+                speed = 2.4
+            elif r < 35:
+                speed = 1.8
+            elif r < 45:
+                speed = 1.0
             else:
-                speed = base_speed * 0.8  # Default approach
+                speed = 0.6
+
+            if abs(correction) > 0.6:
+                speed *= 0.6
+            elif abs(correction) > 0.3:
+                speed *= 0.8
 
             left_speed = speed - correction
             right_speed = speed + correction
 
-            print(f"Tracking ball | Speeds: {left_speed:.2f}, {right_speed:.2f}")
-
-        # 3. Recovery after obstacle
-        elif just_avoided_obstacle and (time.time() - obstacle_cleared_time < 4.0):
-            if recovery_stage == 0:
-                left_speed, right_speed = 2.0, -2.0
-                print("Recovery stage 0: Looking left for ball")
-                if time.time() - obstacle_cleared_time > 1.0:
-                    recovery_stage = 1
-                    recovery_stage_start = time.time()
-
-            elif recovery_stage == 1:
-                left_speed, right_speed = -2.0, 2.0
-                print("Recovery stage 1: Looking right for ball")
-                if time.time() - recovery_stage_start > 1.0:
-                    recovery_stage = 2
-                    recovery_stage_start = time.time()
-
-            elif recovery_stage == 2:
-                if last_ball_direction == -1:
-                    left_speed, right_speed = 1.6, -1.6
-                    print("Recovery stage 2: Final check left (last seen left)")
-                elif last_ball_direction == 1:
-                    left_speed, right_speed = -1.6, 1.6
-                    print("Recovery stage 2: Final check right (last seen right)")
-                else:
-                    left_speed, right_speed = 0.5, -0.5
-                    print("Recovery stage 2: Final scan")
-                if time.time() - recovery_stage_start > 1.0:
-                    just_avoided_obstacle = False
-                    recovery_stage = 0
-
-
-        # 4. Initial search for ball
-        elif not initial_search_done:
-            if time.time() - initial_search_start < initial_search_time:
-                left_speed, right_speed = -1.5, 1.5
-                print("Initial ball search")
-            else:
-                initial_search_done = True
-                continue
-
-        # 5. Wall following if ball lost
-        elif ball_last_seen is None or time.time() - ball_last_seen > ball_lost_timeout:
-            # Do staged scanning before wall following
-            time_since_lost = time.time() - ball_last_seen if ball_last_seen else float('inf')
-
-            if ball_search_stage == 0:
-                left_speed, right_speed = 1.5, -1.5
-                print("Ball search stage 0: Scanning left")
-                if time_since_lost > ball_lost_timeout + 1.5:
-                    ball_search_stage = 1
-                    ball_search_stage_start = time.time()
-
-            elif ball_search_stage == 1:
-                left_speed, right_speed = -1.5, 1.5
-                print("Ball search stage 1: Scanning right")
-                if time.time() - ball_search_stage_start > 1.0:
-                    ball_search_stage = 2
-                    ball_search_stage_start = time.time()
-
-            elif ball_search_stage == 2:
-                print("Ball not found. Switching to wall following.")
-                left_speed, right_speed, wall_last_error, wall_integral, last_time = perform_wall_following(
-                    readings, wall_last_error, wall_integral, last_time
-                )
-            else:
-                ball_search_stage = 0  # Reset
+            print(f"Tracking ball (r={r}) | Speeds: {left_speed:.2f}, {right_speed:.2f}")
 
 
 
-        # 6. Ball lost but recently seen – rotate to search
         else:
-            left_speed, right_speed = 0.5, -0.5
-            print("Searching for ball after loss")
+
+            # Structured street-like scanning: LEFT -> RIGHT -> LEFT
+
+            scan_left = 1.0
+
+            scan_right = 2.0
+
+            scan_final_left = 3.0
+
+            if search_step == 0:
+
+                search_step = 1
+
+                search_start_time = current_time
+
+                print("Ball lost: scanning LEFT")
+
+                left_speed, right_speed = -1.5, 1.5
+
+
+            elif search_step == 1 and current_time - search_start_time < scan_left:
+
+
+                left_speed, right_speed = -1.5, 1.5
+
+
+            elif search_step == 1:
+
+                search_step = 2
+
+                search_start_time = current_time
+
+                print("Scanning RIGHT")
+
+                left_speed, right_speed = 1.5, -1.5
+
+
+            elif search_step == 2 and current_time - search_start_time < scan_right:
+
+                left_speed, right_speed = 0.5, -0.5
+
+
+            elif search_step == 2:
+
+                search_step = 3
+
+                search_start_time = current_time
+
+                print("Final look LEFT")
+
+                left_speed, right_speed = -0.5, 0.5
+
+
+            elif search_step == 3 and current_time - search_start_time < scan_final_left:
+
+                left_speed, right_speed = -0.5, 0.5
+
+
+            elif search_step == 3:
+
+                search_step = 4
+
+                print("Ball not found — full slow rotation")
+
+                left_speed, right_speed = 0.5, -0.5
+
+
+            elif search_step == 4:
+
+                left_speed, right_speed = 0.5, -0.5
 
         # Clamp speeds
         left_speed = max(min_speed, min(max_speed, left_speed))
         right_speed = max(min_speed, min(max_speed, right_speed))
         robot.set_speed(left_speed, right_speed)
 
-        # Display ball if found
         if ball:
             x, y, r = ball
             cv2.circle(img, (x, y), r, (0, 255, 0), 2)
@@ -301,6 +215,7 @@ def main():
 
     coppelia.stop_simulation()
     cv2.destroyAllWindows()
+
 
 if __name__ == '__main__':
     main()
