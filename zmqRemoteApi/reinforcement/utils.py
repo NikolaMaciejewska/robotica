@@ -1,17 +1,42 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
+from mypy.build import default_data_dir
+
+""""(0.7, 0.7),  # slow forward
+(0.8, 0.8),  # medium forward
+(1.0, 1.0),  # fast forward
+
+(0.4, 0.6),  # slow left
+(0.6, 0.4),  # slow right
+(0.2, 0.5), # sharper left
+(0.5, 0.2), # sharper right
+
+(-0.4, -0.4),
+(0.0, 0.0)"""
+"""
+(1.5, 1.5),  # slow forward
+(2.5, 2.5),  # fast forward
+
+(-1.5, 1.5),  # in-place left
+(1.5, -1.5),  # in-place right
+
+(1.5, 2.5),  # gentle left curve
+(2.5, 1.5),  # gentle right curve"""
+
 
 def action_to_speed(action):
     return [
-        (0.3, 0.3),  # slow forward
-        (1.0, 1.0),  # fast forward
-        (0.3, 0.6),  # slow left
-        (0.6, 0.3),  # slow right
-        (-1.0, 1.0), # spin left
-        (1.0, -1.0), # spin right
-        (-0.5, -0.5),
-        (0.0, 0.0)
+        (1.5, 1.5),  # slow forward
+        (2.5, 2.5),  # fast forward
+
+        (-1.5, 1.5),  # in-place left
+        (1.5, -1.5),  # in-place right
+
+        (1.5, 2.5),  # gentle left curve
+        (2.5, 1.5),  # gentle right curve
+
+        (-0.5, -0.5)
     ][action]
 
 def detect_ball(img):
@@ -34,7 +59,7 @@ def detect_ball(img):
             ball_detected = True
     return ball_detected, ball_x_norm, ball_radius_norm
 
-def plot_rewards(rewards, window=10, save_path='training_plot.png'):
+def plot_rewards(rewards, window=10, save_path='training_plot1.png'):
     smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
     plt.figure(figsize=(12, 6))
     plt.plot(rewards, label='Episode Reward')

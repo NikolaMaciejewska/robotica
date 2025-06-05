@@ -84,7 +84,7 @@ def detect_ball(img):
 
 import matplotlib.pyplot as plt
 
-def plot_rewards(rewards, window=10, save_path='training_plot.png'):
+def plot_rewards(rewards, window=10, save_path='training_plot1.png'):
     smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
 
     plt.figure(figsize=(12, 6))
@@ -127,7 +127,7 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
     target_net.eval()
 
     if not train_mode:
-        policy_net.load_state_dict(torch.load('../python/dqn_model1.pth', map_location=device))
+        policy_net.load_state_dict(torch.load('models_archive/dqn_model1.pth', map_location=device))
         target_net.load_state_dict(policy_net.state_dict())
 
     optimizer = optim.Adam(policy_net.parameters(), lr=1e-3)
@@ -261,8 +261,8 @@ def main(args=None, train_mode=False, obstacle_mode=True, ball_mode=True):
 
     # Save model
     if train_mode:
-        torch.save(policy_net.state_dict(), '../python/dqn_model1.pth')
-        np.save('../python/episode_rewards.npy', episode_rewards)
+        torch.save(policy_net.state_dict(), 'models_archive/dqn_model1.pth')
+        np.save('models_archive/episode_rewards_phase1_try1.npy', episode_rewards)
         plot_rewards(episode_rewards)
 
 if __name__ == '__main__':

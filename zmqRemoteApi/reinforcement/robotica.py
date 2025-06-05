@@ -19,6 +19,8 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
+import math
+import random
 
 import numpy as np
 import cv2
@@ -31,8 +33,11 @@ class Coppelia():
 
     def __init__(self):
         print('*** connecting to coppeliasim')
-        client = RemoteAPIClient()
-        self.sim = client.getObject('sim')
+        try:
+            client = RemoteAPIClient()
+            self.sim = client.getObject('sim')
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to CoppeliaSim: {e}")
 
     def start_simulation(self):
         # print('*** saving environment')
@@ -60,9 +65,14 @@ class P3DX():
 
     def __init__(self, sim, robot_id, use_camera=False, use_lidar=False):
         self.sim = sim
+        self.robot_id = robot_id
         print('*** getting handles', robot_id)
         self.left_motor = self.sim.getObject(f'/{robot_id}/leftMotor')
         self.right_motor = self.sim.getObject(f'/{robot_id}/rightMotor')
+
+        if self.left_motor == -1 or self.right_motor == -1:
+            raise RuntimeError("Motor handles not found! Check robot path or object names in the scene.")
+
         self.sonar = []
         for i in range(self.num_sonar):
             self.sonar.append(self.sim.getObject(f'/{robot_id}/ultrasonicSensor[{i}]'))
@@ -84,9 +94,24 @@ class P3DX():
         return readings
 
     def get_image(self):
-        img, resX, resY = self.sim.getVisionSensorCharImage(self.camera)
-        img = np.frombuffer(img, dtype=np.uint8).reshape(resY, resX, 3)
-        img = cv2.flip(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), 0)
+        if not hasattr(self, 'camera'):
+            raise RuntimeError("Camera not initialized. Set `use_camera=True` in constructor.")
+
+        # Updated API: returns [img_data, resolutionX, resolutionY]
+        img_data, [resX, resY] = self.sim.getVisionSensorImg(self.camera)
+
+        if img_data is None or resX == 0 or resY == 0:
+            raise RuntimeError("Failed to retrieve image from vision sensor.")
+
+        # Convert to NumPy array
+        img = np.frombuffer(img_data, dtype=np.uint8).reshape((resY, resX, 3))
+
+        # Flip image vertically (CoppeliaSim returns bottom-up)
+        img = cv2.flip(img, 0)
+
+        # Convert BGR to RGB
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
         return img
 
     def get_lidar(self):
@@ -96,15 +121,37 @@ class P3DX():
         else:
             return self.sim.unpackFloatTable(data)
 
+    def get_orientation(self):
+        orient = self.sim.getObjectOrientation(self.robot_handle, -1)
+        return orient
+
     def set_speed(self, left_speed, right_speed):
-        self.sim.setJointTargetVelocity(self.left_motor, left_speed)
-        self.sim.setJointTargetVelocity(self.right_motor, right_speed)
+        current_handle = self.sim.getObject(f'/{self.robot_id}/leftMotor')
+        #print(f"Stored left_motor handle: {self.left_motor}")
+        #print(f"Current left_motor handle from sim: {current_handle}")
+        if self.left_motor != current_handle:
+            print("Warning: left_motor handle has changed. Possible object reload or scene reset?")
+        if self.sim.getSimulationState() == self.sim.simulation_stopped:
+            print("Warning: Trying to set motor speed while simulation is stopped.")
+        else:
+            self.sim.setJointTargetVelocity(self.left_motor, left_speed)
+            self.sim.setJointTargetVelocity(self.right_motor, right_speed)
 
     #NEW
     def reset_to_initial_position(self):
+        # Set position to initial
         self.sim.setObjectPosition(self.robot_handle, -1, self.initial_position)
-        self.sim.setObjectOrientation(self.robot_handle, -1, self.initial_orientation)
-        self.set_speed(0.0, 0.0)  # Motoren stoppen
+
+        # Generate random yaw (rotation around z-axis)
+        random_yaw = random.uniform(-math.pi, math.pi)  # from -180° to 180°
+        random_orientation = list(self.initial_orientation)  # copy existing orientation
+        random_orientation[2] = random_yaw  # modify yaw (z-axis angle)
+
+        # Set the random orientation
+        self.sim.setObjectOrientation(self.robot_handle, -1, random_orientation)
+
+        # Stop motors
+        #self.set_speed(0.0, 0.0)
 
 
 def main(args=None):
