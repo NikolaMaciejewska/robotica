@@ -17,7 +17,7 @@ def run(obstacle_mode=True, ball_mode=True):
 
     # Load trained model
     policy_net = DQN(state_dim, ACTION_DIM).to(device)
-    policy_net.load_state_dict(torch.load('models_archive/dqn_model_phase1_try1.pth', map_location=device))
+    policy_net.load_state_dict(torch.load('dqn_model_phase1_final.pth', map_location=device))
     policy_net.eval()
 
     coppelia = robotica.Coppelia()

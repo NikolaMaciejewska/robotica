@@ -60,11 +60,17 @@ def detect_ball(img):
     return ball_detected, ball_x_norm, ball_radius_norm
 
 def plot_rewards(rewards, window=10, save_path='training_plot1.png'):
-    smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
     plt.figure(figsize=(12, 6))
     plt.plot(rewards, label='Episode Reward')
-    plt.plot(range(window - 1, len(rewards)), smoothed, '--', label=f'{window}-Ep Moving Avg')
-    plt.xlabel('Episode'); plt.ylabel('Total Reward')
+
+    if len(rewards) >= window:
+        smoothed = np.convolve(rewards, np.ones(window)/window, mode='valid')
+        plt.plot(range(window - 1, len(rewards)), smoothed, '--', label=f'{window}-Ep Moving Avg')
+    else:
+        print(f"Not enough rewards to compute a moving average with window={window}. Skipping moving average plot.")
+
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
     plt.grid()
     plt.legend()
     plt.title('Training Progress')

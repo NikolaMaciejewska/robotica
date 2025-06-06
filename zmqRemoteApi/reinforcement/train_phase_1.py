@@ -15,7 +15,7 @@ def check_upside_down(robot):
     orient = robot.get_orientation()
     return abs(orient[0]) > 1.0 or abs(orient[1]) > 1.0
 
-def train_search_phase(obstacle_mode, ball_mode):
+def train_phase_1(obstacle_mode, ball_mode):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     state_dim = (STATE_DIM_OBSTACLE if obstacle_mode else 0) + (STATE_DIM_BALL if ball_mode else 0) + 3
     action_dim = ACTION_DIM
@@ -142,4 +142,4 @@ def train_search_phase(obstacle_mode, ball_mode):
     plot_rewards(episode_rewards, save_path=PLOT_PATH)
 
 if __name__ == '__main__':
-    train_search_phase(obstacle_mode=True, ball_mode=True)
+    train_phase_1(obstacle_mode=True, ball_mode=True)

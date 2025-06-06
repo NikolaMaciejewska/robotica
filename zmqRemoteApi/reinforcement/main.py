@@ -31,8 +31,8 @@ def get_state(robot, obstacle_mode, ball_mode, last_ball_seen=False, last_ball_d
 
 def compute_reward(obstacle_mode, ball_mode, sonar_next, ball_detected, ball_x_norm, ball_radius_norm, action, last_ball_seen=False, last_ball_dir=0.0, last_ball_radius=0.0):
     reward = 0.0
-    front_min = min(sonar_next[2:6])
-    too_close = front_min < 0.2
+    sonar_min = min(sonar_next)
+    too_close = sonar_min < 0.1
 
     # Penalize crashes
     if obstacle_mode and too_close:

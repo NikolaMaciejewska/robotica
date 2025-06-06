@@ -57,6 +57,47 @@ class Coppelia():
     def is_running(self):
         return self.sim.getSimulationState() != self.sim.simulation_stopped
 
+    def randomize_obstacles_positions(self, obstacles_parent_name, x_range, y_range):
+        """
+        Randomly place all child obstacles under `obstacles_parent_name` within given x and y ranges.
+        z_fixed is the fixed height at which obstacles will be placed.
+
+        Parameters:
+            obstacles_parent_name (str): Name/path of the parent object containing obstacles
+            x_range (tuple): (min_x, max_x)
+            y_range (tuple): (min_y, max_y)
+            z_fixed (float): Fixed z position for all obstacles (default 0.0)
+        """
+
+        parent_handle = self.sim.getObject(obstacles_parent_name)
+        if parent_handle == -1:
+            raise RuntimeError(f"Parent object '{obstacles_parent_name}' not found in the scene.")
+
+        # Get children handles
+        children = self.sim.getObjectsInTree(parent_handle, self.sim.handle_all, 3)
+        print(children)
+
+        print(f"Randomizing position of {len(children)} obstacles under '{obstacles_parent_name}'")
+
+        for child_handle in children:
+            # Get current position
+            current_pos = self.sim.getObjectPosition(child_handle, -1)
+
+            # Generate random x,y within range but keep original z
+            x = random.uniform(*x_range)
+            y = random.uniform(*y_range)
+            z = current_pos[2]
+
+            self.sim.setObjectPosition(child_handle, -1, [x, y, z])
+
+            # Optional: randomize orientation around z-axis
+            current_orient = self.sim.getObjectOrientation(child_handle, -1)
+            random_yaw = random.uniform(-math.pi, math.pi)
+            new_orient = [current_orient[0], current_orient[1], random_yaw]
+            self.sim.setObjectOrientation(child_handle, -1, new_orient)
+
+        print("Obstacle positions randomized.")
+
 
 class P3DX():
 
@@ -152,6 +193,7 @@ class P3DX():
 
         # Stop motors
         #self.set_speed(0.0, 0.0)
+
 
 
 def main(args=None):
